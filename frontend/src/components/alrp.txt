@@ -1,0 +1,450 @@
+Yes, absolutely! You can connect your Python OCR code to CCTV cameras. The core approach is replacing the webcam feed with an RTSP stream from your CCTV camera. Here's a comprehensive guide with working code.
+
+## How It Works
+
+Most CCTV/IP cameras use the **RTSP (Real Time Streaming Protocol)** protocol. Your Python OCR code can connect to this stream using OpenCV's `VideoCapture`, just like it would with a regular webcam.
+
+### Simple Architecture
+```
+CCTV Camera (RTSP Stream) → Python OCR Script → Text Detection Results
+```
+
+## Complete Working Code
+
+### 1. Basic CCTV OCR (Single Camera)
+
+```python
+import cv2
+import easyocr
+import numpy as np
+from datetime import datetime
+
+# Initialize OCR reader (supports 80+ languages)
+# For GPU: reader = easyocr.Reader(['en'], gpu=True)
+reader = easyocr.Reader(['en'], gpu=False)
+
+# CCTV Camera RTSP URL
+# Format: rtsp://username:password@ip_address:port/stream_path
+RTSP_URL = "rtsp://admin:password@192.168.1.100:554/stream1"
+
+# Alternative formats for common cameras:
+# Hikvision: rtsp://username:password@ip:554/Streaming/Channels/101
+# Dahua: rtsp://username:password@ip:554/cam/realmonitor?channel=1&subtype=0
+# Generic: rtsp://ip:554/live
+
+def process_frame(frame):
+    """Extract text from a single frame"""
+    # Convert to RGB (EasyOCR expects RGB)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Perform OCR
+    results = reader.readtext(rgb_frame, paragraph=False)
+    
+    extracted_texts = []
+    for (bbox, text, confidence) in results:
+        if confidence > 0.5:  # Filter low confidence results
+            extracted_texts.append({
+                'text': text,
+                'confidence': confidence,
+                'bbox': bbox
+            })
+            
+            # Draw bounding box on frame
+            pts = np.array(bbox, dtype=np.int32)
+            cv2.polylines(frame, [pts], True, (0, 255, 0), 2)
+            cv2.putText(frame, f"{text} ({confidence:.2f})", 
+                       (bbox[0][0], bbox[0][1] - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    
+    return frame, extracted_texts
+
+def main():
+    # Connect to CCTV camera
+    print(f"Connecting to CCTV: {RTSP_URL}")
+    cap = cv2.VideoCapture(RTSP_URL)
+    
+    if not cap.isOpened():
+        print("Error: Could not connect to CCTV camera")
+        print("Check:")
+        print("1. RTSP URL is correct")
+        print("2. Camera is on the network")
+        print("3. Username/password are correct")
+        return
+    
+    print("Connected to CCTV! Press 'q' to quit, 's' to save frame")
+    
+    frame_count = 0
+    process_every_n_frames = 3  # Process every 3rd frame to save CPU
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame")
+            break
+        
+        frame_count += 1
+        
+        # Process only every Nth frame for performance
+        if frame_count % process_every_n_frames == 0:
+            processed_frame, texts = process_frame(frame)
+            
+            # Print detected texts
+            if texts:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Detected: {[t['text'] for t in texts]}")
+        else:
+            processed_frame = frame
+        
+        # Display the frame
+        cv2.imshow('CCTV OCR Monitor', processed_frame)
+        
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('s'):
+            # Save frame with timestamp
+            filename = f"cctv_capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            cv2.imwrite(filename, frame)
+            print(f"Saved: {filename}")
+    
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
+```
+
+### 2. Multi-Camera CCTV OCR System with Web Dashboard
+
+Here's a more advanced version that can monitor multiple cameras and provides a web dashboard:
+
+```python
+import cv2
+import easyocr
+import threading
+import queue
+import time
+from flask import Flask, Response, jsonify, render_template_string
+from datetime import datetime
+import json
+import numpy as np
+
+app = Flask(__name__)
+
+# Configuration for multiple cameras
+CAMERAS = {
+    'camera_1': {
+        'name': 'Main Entrance',
+        'url': 'rtsp://admin:password@192.168.1.100:554/stream1',
+        'enabled': True
+    },
+    'camera_2': {
+        'name': 'Parking Lot',
+        'url': 'rtsp://admin:password@192.168.1.101:554/stream1',
+        'enabled': True
+    },
+    'camera_3': {
+        'name': 'Back Gate',
+        'url': 'rtsp://admin:password@192.168.1.102:554/stream1',
+        'enabled': False
+    }
+}
+
+# Initialize OCR reader once (shared across cameras)
+reader = easyocr.Reader(['en'], gpu=False)
+
+# Queue for frame processing
+frame_queue = queue.Queue(maxsize=10)
+result_queue = queue.Queue()
+
+# Store latest results for each camera
+latest_results = {cam_id: {'texts': [], 'last_update': None} for cam_id in CAMERAS}
+
+def process_frame_worker():
+    """Worker thread to process OCR on frames"""
+    while True:
+        try:
+            cam_id, frame = frame_queue.get(timeout=1)
+            
+            # Convert to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Perform OCR
+            results = reader.readtext(rgb_frame, paragraph=False)
+            
+            # Extract texts with confidence > 0.5
+            texts = [{'text': text, 'confidence': conf} 
+                    for (_, text, conf) in results if conf > 0.5]
+            
+            # Update latest results
+            latest_results[cam_id] = {
+                'texts': texts,
+                'last_update': datetime.now().isoformat(),
+                'camera_name': CAMERAS[cam_id]['name']
+            }
+            
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"OCR Worker Error: {e}")
+
+def capture_camera(cam_id, cam_config):
+    """Capture frames from a single CCTV camera"""
+    url = cam_config['url']
+    cap = cv2.VideoCapture(url)
+    
+    if not cap.isOpened():
+        print(f"Failed to connect to {cam_config['name']} at {url}")
+        return
+    
+    frame_count = 0
+    process_every = 5  # Process every 5th frame
+    
+    print(f"Connected to {cam_config['name']}")
+    
+    while cam_config['enabled']:
+        ret, frame = cap.read()
+        if not ret:
+            print(f"Lost connection to {cam_config['name']}, reconnecting...")
+            cap.release()
+            cap = cv2.VideoCapture(url)
+            time.sleep(2)
+            continue
+        
+        frame_count += 1
+        
+        # Add frame to processing queue periodically
+        if frame_count % process_every == 0:
+            if not frame_queue.full():
+                frame_queue.put((cam_id, frame.copy()))
+        
+        # Encode frame for streaming
+        ret, buffer = cv2.imencode('.jpg', frame)
+        if ret:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        
+        time.sleep(0.03)  # ~30 FPS
+    
+    cap.release()
+
+@app.route('/')
+def index():
+    """Dashboard showing all camera feeds with OCR results"""
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/video_feed/<cam_id>')
+def video_feed(cam_id):
+    """Stream video feed for a specific camera"""
+    if cam_id not in CAMERAS or not CAMERAS[cam_id]['enabled']:
+        return "Camera not found", 404
+    
+    return Response(
+        capture_camera(cam_id, CAMERAS[cam_id]),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
+
+@app.route('/api/results')
+def get_results():
+    """Get latest OCR results for all cameras"""
+    return jsonify(latest_results)
+
+# HTML Template for Dashboard
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CCTV OCR Monitor</title>
+    <style>
+        body { font-family: Arial; background: #1a1a2e; color: white; margin: 0; padding: 20px; }
+        h1 { text-align: center; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
+        .camera-card { background: #16213e; border-radius: 10px; padding: 15px; }
+        .camera-card h3 { margin: 0 0 10px 0; }
+        video, img { width: 100%; border-radius: 5px; background: #000; }
+        .ocr-results { background: #0f3460; border-radius: 5px; padding: 10px; margin-top: 10px; max-height: 150px; overflow-y: auto; }
+        .text-item { background: #e94560; display: inline-block; padding: 5px 10px; margin: 5px; border-radius: 5px; font-size: 12px; }
+        .timestamp { font-size: 11px; color: #888; margin-top: 5px; }
+        .refresh-btn { background: #e94560; border: none; color: white; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 20px auto; display: block; }
+    </style>
+</head>
+<body>
+    <h1>📹 CCTV OCR Monitoring System</h1>
+    <div class="grid" id="cameraGrid"></div>
+    <button class="refresh-btn" onclick="refreshResults()">🔄 Refresh Results</button>
+
+    <script>
+        const cameras = {{ cameras|tojson }};
+        const grid = document.getElementById('cameraGrid');
+        
+        // Build camera grid
+        for (const [camId, cam] of Object.entries(cameras)) {
+            if (cam.enabled) {
+                const card = document.createElement('div');
+                card.className = 'camera-card';
+                card.id = `card-${camId}`;
+                card.innerHTML = `
+                    <h3>${cam.name}</h3>
+                    <img src="/video_feed/${camId}" alt="Camera Feed">
+                    <div class="ocr-results" id="results-${camId}">
+                        <div>Waiting for text detection...</div>
+                    </div>
+                    <div class="timestamp" id="time-${camId}"></div>
+                `;
+                grid.appendChild(card);
+            }
+        }
+        
+        function refreshResults() {
+            fetch('/api/results')
+                .then(res => res.json())
+                .then(data => {
+                    for (const [camId, result] of Object.entries(data)) {
+                        const resultsDiv = document.getElementById(`results-${camId}`);
+                        const timeDiv = document.getElementById(`time-${camId}`);
+                        
+                        if (resultsDiv && result.texts && result.texts.length > 0) {
+                            resultsDiv.innerHTML = result.texts.map(t => 
+                                `<div class="text-item">${t.text} (${Math.round(t.confidence * 100)}%)</div>`
+                            ).join('');
+                        } else if (resultsDiv) {
+                            resultsDiv.innerHTML = '<div>No text detected</div>';
+                        }
+                        
+                        if (timeDiv && result.last_update) {
+                            timeDiv.innerHTML = `Last update: ${new Date(result.last_update).toLocaleTimeString()}`;
+                        }
+                    }
+                });
+        }
+        
+        refreshResults();
+        setInterval(refreshResults, 3000);
+    </script>
+</body>
+</html>
+'''
+
+def start_ocr_worker():
+    """Start the OCR worker thread"""
+    worker_thread = threading.Thread(target=process_frame_worker, daemon=True)
+    worker_thread.start()
+    return worker_thread
+
+if __name__ == "__main__":
+    # Start OCR worker
+    start_ocr_worker()
+    
+    # Start Flask server
+    print("CCTV OCR System Starting...")
+    print(f"Cameras configured: {len([c for c in CAMERAS.values() if c['enabled']])}")
+    print("Access dashboard at: http://localhost:5000")
+    
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+```
+
+### 3. CCTV RTSP URL Formats for Common Brands
+
+```python
+# Common RTSP URL formats for different CCTV brands
+
+RTSP_FORMATS = {
+    'hikvision': 'rtsp://{username}:{password}@{ip}:554/Streaming/Channels/{channel}',
+    'dahua': 'rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel={channel}&subtype=0',
+    'axis': 'rtsp://{username}:{password}@{ip}:554/axis-media/media.amp',
+    'samsung': 'rtsp://{username}:{password}@{ip}:554/profile1/media.smp',
+    'generic': 'rtsp://{username}:{password}@{ip}:554/live',
+    'uniview': 'rtsp://{username}:{password}@{ip}:554/streaming/channels/{channel}',
+}
+
+def get_rtsp_url(brand, ip, username='admin', password='admin', channel=1):
+    """Generate RTSP URL for different camera brands"""
+    if brand in RTSP_FORMATS:
+        return RTSP_FORMATS[brand].format(
+            username=username, password=password, ip=ip, channel=channel
+        )
+    return RTSP_FORMATS['generic'].format(
+        username=username, password=password, ip=ip
+    )
+
+# Example usage
+hikvision_url = get_rtsp_url('hikvision', '192.168.1.100', 'admin', '12345', 1)
+print(f"Hikvision URL: {hikvision_url}")
+```
+
+## Performance Optimization Tips
+
+### 1. **Frame Skipping**
+```python
+# Process only every Nth frame
+frame_count = 0
+process_every = 5  # Process 1 out of 5 frames
+
+if frame_count % process_every == 0:
+    results = reader.readtext(frame)
+```
+
+### 2. **ROI (Region of Interest)**
+```python
+# Only scan specific area of frame
+def get_roi(frame, roi_coords):
+    x, y, w, h = roi_coords
+    return frame[y:y+h, x:x+w]
+
+# Example: only scan bottom half where license plates appear
+roi = get_roi(frame, [0, frame.shape[0]//2, frame.shape[1], frame.shape[0]//2])
+```
+
+### 3. **Multi-threading**
+```python
+# Use separate threads for capture and OCR
+capture_thread = threading.Thread(target=capture_frames)
+ocr_thread = threading.Thread(target=process_frames)
+```
+
+## Installation
+
+```bash
+# Install required packages
+pip install opencv-python easyocr flask numpy
+
+# For GPU acceleration (optional)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+## Finding Your CCTV RTSP URL
+
+1. **Check camera documentation** for RTSP stream path
+2. **Use ONVIF Device Manager** to discover streams
+3. **Common ports**: 554, 8554, 1935
+4. **Test with VLC**: Open Network Stream → enter RTSP URL
+
+## Alternative: Using Existing CCTV Software
+
+### ZoneMinder Integration 
+ZoneMinder has an ML API that can be extended with custom OCR:
+
+```python
+# ZoneMinder ML API integration
+# https://github.com/ZoneMinder/mlapi
+```
+
+### Motion Detection + OCR 
+Combine motion detection with OCR to save processing:
+
+```python
+# Only run OCR when motion is detected
+motion_detected = detect_motion(prev_frame, current_frame)
+if motion_detected:
+    results = reader.readtext(current_frame)
+```
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Cannot connect to RTSP | Check IP, port, username/password. Test with VLC first |
+| High latency | Reduce frame processing frequency, enable GPU |
+| Poor OCR accuracy | Improve ROI, increase frame resolution, ensure good lighting |
+| CPU 100% | Implement frame skipping, use lightweight OCR model |
+
+This setup will let you monitor multiple CCTV cameras with real-time text detection. The web dashboard provides a convenient way to view all feeds and detected text at once!

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test OCR Direct</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #080c12; color: #fff; }
+        .container { max-width: 600px; margin: 0 auto; }
+        video, canvas, img { width: 100%; border-radius: 10px; margin: 10px 0; }
+        button { padding: 10px 20px; margin: 5px; background: #00d278; border: none; border-radius: 5px; cursor: pointer; }
+        .result { margin-top: 20px; padding: 15px; background: #0d1520; border-radius: 10px; }
+        .plate { font-size: 24px; color: #00d278; font-weight: bold; }
+        .error { color: #e63946; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test OCR - License Plate Detection</h1>
+        
+        <video id="video" autoplay playsinline></video>
+        
+        <div>
+            <button onclick="startCamera()">Start Camera</button>
+            <button onclick="captureAndDetect()">Capture & Detect</button>
+        </div>
+        
+        <canvas id="canvas" style="display:none;"></canvas>
+        
+        <div id="result" class="result">
+            <p>Click "Capture & Detect" to test</p>
+        </div>
+    </div>
+
+    <script>
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let stream = null;
+
+        async function startCamera() {
+            try {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment" }
+                });
+                video.srcObject = stream;
+                document.getElementById('result').innerHTML = '<p>✓ Camera ready. Position license plate and click Capture & Detect</p>';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<p class="error">Camera error: ${error.message}</p>`;
+            }
+        }
+
+        async function captureAndDetect() {
+            if (!video.videoWidth) {
+                alert("Camera not ready. Click Start Camera first.");
+                return;
+            }
+            
+            // Capture image
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Get image as base64
+            let imageData = canvas.toDataURL('image/jpeg', 0.8);
+            
+            // Show loading
+            document.getElementById('result').innerHTML = '<p>⏳ Processing image...</p>';
+            
+            try {
+                // Send to OCR server
+                let response = await fetch('http://localhost:5000/api/ocr/detect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: imageData })
+                });
+                
+                let result = await response.json();
+                console.log("OCR Result:", result);
+                
+                if (result.success && result.plate) {
+                    document.getElementById('result').innerHTML = `
+                        <h3>✅ License Plate Detected!</h3>
+                        <div class="plate">${result.plate}</div>
+                        <p>Confidence: ${result.confidence}%</p>
+                        <p>Processing Time: ${result.processingTime}ms</p>
+                        <p>Full Text: ${result.full_text || 'N/A'}</p>
+                    `;
+                } else {
+                    document.getElementById('result').innerHTML = `
+                        <h3 class="error">❌ No License Plate Detected</h3>
+                        <p>Tips:</p>
+                        <ul>
+                            <li>Make sure license plate is clearly visible</li>
+                            <li>Ensure good lighting</li>
+                            <li>Hold camera steady</li>
+                            <li>Position plate in center of frame</li>
+                        </ul>
+                        <p>Error: ${result.error || 'No plate found'}</p>
+                        <p>Debug: Check server console for details</p>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+
+        // Auto-start camera
+        startCamera();
+    </script>
+</body>
+</html>

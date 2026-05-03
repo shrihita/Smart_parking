@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+sqlalchemy
+ultralytics
+opencv-python
+qrcode[pil]
+python-multipart
