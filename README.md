@@ -15,12 +15,7 @@ A complete smart parking management system with license plate recognition, onlin
 - [Installation](#installation)
 - [Database Setup](#database-setup)
 - [Configuration](#configuration)
-- [Running the Application](#running-the-application)
-- [API Documentation](#api-documentation)
-- [Screenshots](#screenshots)
 - [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
 
 ## Features
 
