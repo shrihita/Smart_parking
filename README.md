@@ -109,14 +109,14 @@ cd frontend
 npm install
 cd ..
 ```
-##Database Setup
-###Open PostgreSQL command line or pgAdmin and run:
+## Database Setup
+### Open PostgreSQL command line or pgAdmin and run:
 ```bash
 CREATE DATABASE parkingdb;
 CREATE USER parking_user WITH PASSWORD 'your_password';
 GRANT ALL PRIVILEGES ON DATABASE parkingdb TO parking_user;
 ```
-###Create Tables
+### Create Tables
 ```bash
 -- Connect to parkingdb
 \c parkingdb;
@@ -199,8 +199,8 @@ INSERT INTO slots (name, area_id, area_name, is_available) VALUES
 ('B3', 2, 'Area B', true),
 ('B4', 2, 'Area B', true);
 ```
-##Configuration
-###Database Configuration(Update server.js with your database credentials):
+## Configuration
+### Database Configuration(Update server.js with your database credentials):
 ```bash
 const db = new Pool({
   user: "Your PostgreSQL username",     
@@ -210,14 +210,152 @@ const db = new Pool({
   port: PostgreSQL port,             
 });
 ```
-###Razorpay Configuration(Update server.js with your Razorpay keys):
+### Razorpay Configuration(Update server.js with your Razorpay keys):
 ```bash
 const razorpay = new Razorpay({
   key_id: "rzp_test_xxxxxxxxxx",     // Your Razorpay Key ID
   key_secret: "xxxxxxxxxxxxxxxxxxxx", // Your Razorpay Secret
 });
 ```
+#### Update React frontend (frontend/src/App.js) with your Razorpay key:
+```bash
+const options = {
+  key: "rzp_test_xxxxxxxxxx",  // Same Key ID as above
+  // ... other options
+};
+```
+### Admin Configuration(Default admin key is admin123. Change it in server.js):
+```bash
+const ADMIN_KEY = "admin123";  // Change this to your secure key
+```
+### OCR Server Configuration(The OCR server runs on port 5002 by default. Ensure it matches in server.js):
+```bash
+const OCR_SERVER_URL = process.env.OCR_SERVER_URL || "http://localhost:5002";
+```
+### Frontend API URL(In frontend/src/App.js, set the BASE_URL):
+```bash
+const BASE_URL = "http://localhost:5000";  // Your Node.js server URL
+```
+#### For production, you can set it to empty string:
+```bash
+const BASE_URL = "";  // Will use relative paths
+```
+## Running the Application
+### Step 1: Start PostgreSQL
+```bash
+# Windows
+net start postgresql-x64-14
 
+# Mac/Linux
+sudo service postgresql start
+```
+### Step 2: Start Python OCR Server
+```bash
+#in terminal
+cd smart-parking
+python ocr_server.py
 
+#Expected Output:
+============================================================
+Starting OCR Server on Port 5002...
+============================================================
+✓ OCR Engine loaded successfully!
 
+==================================================
+OCR Server Running on port 5002!
+==================================================
+Health check: GET http://localhost:5002/health
+Detection: POST http://localhost:5002/detect
+==================================================
+```
 
+### Step 3: Start Node.js Server
+```bash
+#in terminal
+cd smart-parking
+node server.js
+
+#Expected Output:
+Database connected successfully
+
+ Scan & Park Server running → http://localhost:5000
+   Admin key: admin123
+   API Health: GET /api/health
+   OCR Endpoint: POST /api/ocr/detect
+   OCR Server Status: GET /api/ocr/health
+```
+
+### Step 4: Start React Frontend
+```bash
+#in terminal
+cd smart-parking/frontend
+npm start
+
+#Expected Output:
+Compiled successfully!
+
+You can now view frontend in the browser.
+  Local:            http://localhost:3000
+  On Your Network:  http://192.168.x.x:3000
+```
+### Step 4: Start React Frontend
+```bash
+#in terminal
+cd smart-parking/frontend
+npm start
+
+#Expected Output:
+Compiled successfully!
+
+You can now view frontend in the browser.
+  Local:            http://localhost:3000
+  On Your Network:  http://192.168.x.x:3000
+```
+## Troubleshooting
+### Issue: OCR Server Not Starting
+```bash
+pip install easyocr opencv-python flask flask-cors
+```
+### Issue: Database Connection Failed
+```bash
+# Windows
+net start postgresql-x64-14
+
+# Mac
+brew services start postgresql
+
+# Linux
+sudo systemctl start postgresql
+```
+## Issue: Camera Not Working
+### Solutions:
+
+- **Ensure HTTPS or localhost (camera requires secure context)
+
+- **Check browser permissions
+
+- **Try different browser (Chrome/Firefox recommended)
+
+- **Check if another app is using camera
+
+## Issue: Razorpay Payment Failed
+### Solutions:
+
+- **Use test mode keys (starting with rzp_test_)
+
+- **Use test card: 4111 1111 1111 1111
+
+- **Check console for errors
+
+##Issue: OCR Not Detecting Plates
+###Tips for better detection:
+
+- **Ensure good lighting
+
+- **Hold camera steady
+
+- **License plate should fill 30-40% of frame
+
+- **Clean camera lens
+
+- **Avoid glare and reflections
