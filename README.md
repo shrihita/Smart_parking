@@ -79,8 +79,8 @@ axios
 crypto (built-in)
 
 ```bash
-git clone https://github.com/yourusername/smart-parking.git
-cd smart-parking
+git clone https://github.com/shrihita/Smart_parking.git
+cd Smart_parking
 
 npm install
 
